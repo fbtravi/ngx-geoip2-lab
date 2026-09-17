@@ -1,26 +1,26 @@
 #!/usr/bin/env python3
-"""set_ip.py - cadastra ou substitui um IP/rede em uma base MMDB de teste.
+"""set_ip.py - add or replace an IP/network in a test MMDB database.
 
-Wrapper Python para o binario mmdbtool (bin/mmdbtool), que usa a lib
-oficial da MaxMind (mmdbwriter, Go) para escrever a base.
+Python wrapper around the mmdbtool binary (bin/mmdbtool), which uses the
+official MaxMind writer library (mmdbwriter, Go) to write the database.
 
-Uso:
-    python3 set_ip.py <arquivo.mmdb> <ip_ou_rede> <country_iso> [--city NOME]
+Usage:
+    python3 set_ip.py <file.mmdb> <ip_or_network> <country_iso> [--city NAME]
 
-Exemplos:
-    # cria a base (se nao existir) e cadastra o IP 8.8.8.8 como BR
+Examples:
+    # create the db (if missing) and add 8.8.8.8 as BR
     python3 set_ip.py db/GeoLite2-City.mmdb 8.8.8.8 BR
 
-    # substitui: mesma rede cadastrada de novo sobrescreve os dados
-    python3 set_ip.py db/GeoLite2-City.mmdb 8.8.8.8 US --city "Cidade Nova"
+    # replace: adding the same network again overwrites the data
+    python3 set_ip.py db/GeoLite2-City.mmdb 8.8.8.8 US --city "New City"
 
-    # cadastra uma rede inteira
+    # add a whole network
     python3 set_ip.py db/GeoLite2-City.mmdb 10.0.0.0/24 BR
 
-    # consulta o que esta cadastrado para um IP
+    # query what is stored for an IP
     python3 set_ip.py db/GeoLite2-City.mmdb --get 8.8.8.8
 
-Os demais campos (cidade default, localizacao etc.) sao fixos, salvo --city.
+All other fields (default city, location, etc.) are fixed, except --city.
 """
 
 import argparse
@@ -37,31 +37,30 @@ def main() -> int:
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter,
     )
-    parser.add_argument("mmdb", help="caminho do arquivo .mmdb")
+    parser.add_argument("mmdb", help="path to the .mmdb file")
     parser.add_argument("network", nargs="?",
-                        help="IP ou rede (ex.: 8.8.8.8 ou 10.0.0.0/24)")
+                        help="IP or network (e.g. 8.8.8.8 or 10.0.0.0/24)")
     parser.add_argument("country", nargs="?",
-                        help="codigo ISO do pais (ex.: BR, US)")
+                        help="country ISO code (e.g. BR, US)")
     parser.add_argument("--city", default=None,
-                        help="nome da cidade (default: 'Cidade Teste')")
+                        help="city name (default: 'Test City')")
     parser.add_argument("--get", metavar="IP",
-                        help="apenas consulta o IP na base, sem gravar")
+                        help="only query the IP in the db, without writing")
     args = parser.parse_args()
 
     if not os.path.exists(MMDBTOOL):
-        print(f"mmdbtool nao encontrado em {MMDBTOOL}", file=sys.stderr)
-        print("compile com: cd mmdbtool && go build -o ../bin/mmdbtool .",
-              file=sys.stderr)
+        print(f"mmdbtool not found at {MMDBTOOL}", file=sys.stderr)
+        print("build it with: make build-tool", file=sys.stderr)
         return 1
 
     if args.get:
         cmd = [MMDBTOOL, "get", args.mmdb, args.get]
     else:
         if not args.network or not args.country:
-            parser.error("network e country sao obrigatorios (ou use --get)")
+            parser.error("network and country are required (or use --get)")
         country = args.country.upper()
         if len(country) != 2:
-            parser.error("country deve ser um codigo ISO de 2 letras (ex.: BR)")
+            parser.error("country must be a 2-letter ISO code (e.g. BR)")
         cmd = [MMDBTOOL, "set", args.mmdb, args.network, country]
         if args.city:
             cmd.append(args.city)

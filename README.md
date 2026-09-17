@@ -1,114 +1,112 @@
 # ngx-geoip2-lab
 
-Laboratório local para testar o módulo nginx [ngx_http_geoip2_module](https://github.com/leev/ngx_http_geoip2_module) — em especial o comportamento do `auto_reload` quando a base GeoIP é trocada.
+A local lab for testing the nginx [ngx_http_geoip2_module](https://github.com/leev/ngx_http_geoip2_module) — in particular the `auto_reload` behavior when the GeoIP database is swapped.
 
-Sobe **dois nginx idênticos** (portas `8080` e `8081`) compartilhando a mesma base MMDB via bind mount, para você comparar comportamentos lado a lado (versões do módulo, cenários de troca da base, etc.).
+It runs **two identical nginx instances** (ports `8080` and `8081`) sharing the same MMDB database via bind mount, so you can compare behaviors side by side (module versions, database swap scenarios, etc.).
 
-## O que tem aqui
+## Quick start
 
-| Arquivo | Descrição |
+```sh
+make up        # build and start both nginx containers
+make curl-a    # query nginx-a (:8080) with the default fake IP 8.8.8.8
+make curl-b    # query nginx-b (:8081)
+```
+
+Run `make help` to see all available targets.
+
+## What's here
+
+| File | Description |
 |---|---|
-| `docker-compose.yml` | Sobe os dois nginx (`nginx-a` em :8080, `nginx-b` em :8081) |
-| `nginx.conf` | Config com `geoip2` + `auto_reload 5s` + IP fake via header `X-Test-IP` |
-| `Dockerfile` | Imagem nginx com o módulo geoip2 |
-| `db/` | Bases MMDB de teste (`base-A.mmdb`, `base-B.mmdb`, `GeoLite2-City.mmdb` — a ativa) |
-| `set_ip.py` | Cadastra/substitui um IP ou rede na base (country + cidade, resto fixo) |
-| `swap-preserve-mtime.sh` | Troca a base ativa **preservando o mtime** (simula produção) |
-| `swap-fresh-mtime.sh` | Troca a base ativa com **mtime novo** (cenário normal) |
-| `test-reload.sh` | Teste automatizado em estágios do cenário de troca com mtime preservado |
-| `mmdbtool/` | Fonte Go do CLI que escreve nas bases (usado pelo `set_ip.py`) |
+| `Makefile` | Shortcuts for everything (`make up`, `make test`, `make swap-b-preserve`, ...) |
+| `docker-compose.yml` | Runs the two nginx (`nginx-a` on :8080, `nginx-b` on :8081) |
+| `nginx.conf` | Config with `geoip2` + `auto_reload 5s` + fake IP via the `X-Test-IP` header |
+| `Dockerfile` | nginx image with the geoip2 module (built from upstream) |
+| `db/` | Test MMDB databases (`base-A.mmdb`, `base-B.mmdb`, `GeoLite2-City.mmdb` — the active one) |
+| `set_ip.py` | Add/replace an IP or network in a database (country + city, the rest is fixed) |
+| `swap-preserve-mtime.sh` | Swap the active database **preserving the mtime** (simulates production) |
+| `swap-fresh-mtime.sh` | Swap the active database with a **new mtime** (normal scenario) |
+| `test-reload.sh` | Staged automated test of the preserved-mtime scenario |
+| `mmdbtool/` | Go source of the CLI that writes to the databases (used by `set_ip.py`) |
 
-## Pré-requisitos
+## Prerequisites
 
-- Docker (com compose)
-- Para editar as bases: Go (para compilar o `mmdbtool`) **ou** usar o binário já commitado em `bin/`
+- Docker (with compose)
+- Go (only to build the `mmdbtool` binary used for editing databases): `make build-tool`
 
-## Subindo o lab
+## Testing a database swap (auto_reload)
+
+### Scenario 1: new mtime (works on any version)
 
 ```sh
-docker compose up -d
+make swap-b          # activate base-B with a fresh mtime
+sleep 6
+make curl-a          # -> "city":"Base B"  (reload detected via the new mtime)
 ```
 
-Verifica:
+### Scenario 2: preserved mtime (the problematic case)
+
+Simulates what happens in production when the database is replaced without updating the timestamp (Docker image layers, `cp -p`, `rsync -a`):
 
 ```sh
-curl -H "X-Test-IP: 8.8.8.8" http://localhost:8080/geoip
-# {"ip":"8.8.8.8","country_code":"US","country_name":"US","city":"Base A"}
+make swap-b-preserve
+sleep 6
+make curl-a
 ```
 
-> O header `X-Test-IP` define o IP "do cliente" — assim você testa qualquer IP sem depender do IP real da requisição.
+With a module **without** inode/size change detection, the reload never fires — nginx stays stuck on the old database forever (and may return empty data, since the mmap was rewritten in place).
 
-## Editando a base de teste
-
-As bases são criadas/editadas com o `set_ip.py`:
+### Automated test
 
 ```sh
-# cadastra o IP 8.8.8.8 como BR com cidade "Sao Paulo" na base ativa
+make test
+```
+
+Runs the full scenario in 5 stages, showing each nginx's response at every step (reset, initial lookup, preserved-mtime swap, immediately after, post-reload, confirmation) plus how many reloads each one logged.
+
+## Editing the test database
+
+Build the writer tool once, then use `set_ip.py`:
+
+```sh
+make build-tool
+
+# add IP 8.8.8.8 as BR with city "Sao Paulo" in the active database
 python3 set_ip.py db/GeoLite2-City.mmdb 8.8.8.8 BR --city "Sao Paulo"
 
-# cadastra uma rede inteira
-python3 set_ip.py db/GeoLite2-City.mmdb 10.0.0.0/24 BR --city "Rede Privada"
+# add a whole network
+python3 set_ip.py db/GeoLite2-City.mmdb 10.0.0.0/24 BR --city "Private Net"
 
-# consulta sem gravar
+# query without writing
 python3 set_ip.py db/GeoLite2-City.mmdb --get 8.8.8.8
 ```
 
-O restante dos campos (location, continent, geoname_ids) é fixo. Country é o ISO de 2 letras (BR, US, ...).
-
-Para recompilar a ferramenta de escrita (opcional — o binário já está em `bin/`):
+Or via the Makefile:
 
 ```sh
-cd mmdbtool && go build -o ../bin/mmdbtool .
+make set IP=8.8.8.8 COUNTRY=BR CITY="Sao Paulo"
+make get IP=8.8.8.8
 ```
 
-## Testando a troca da base (auto_reload)
+All other fields (location, continent, geoname ids) are fixed. Country is the 2-letter ISO code (BR, US, ...).
 
-### Cenário 1: mtime novo (funciona em qualquer versão)
+## Using real MMDB databases
 
-```sh
-./swap-fresh-mtime.sh db/base-B.mmdb
-sleep 6
-curl -H "X-Test-IP: 8.8.8.8" http://localhost:8080/geoip
-# -> "city":"Base B"  (o reload detectou pelo mtime novo)
-```
+The databases in `db/` are tiny test fixtures with only a few IPs. To use real GeoLite2/GeoIP2 databases from MaxMind:
 
-### Cenário 2: mtime preservado (o caso problemático)
+1. Drop the real file into `db/` as `GeoLite2-City.mmdb` (the name `nginx.conf` expects), or
+2. Edit the path in `nginx.conf` (`geoip2 /etc/nginx/geoip/YOUR_FILE.mmdb {`) and adjust the volume mount.
 
-Simula o que acontece em produção quando a base é trocada sem atualizar o timestamp (layers de imagem Docker, `cp -p`, `rsync -a`):
+To compare different module builds (e.g. one with a fix, one without), point each service in `docker-compose.yml` at a different image — both nginx share the same database via the bind mount.
 
-```sh
-./swap-preserve-mtime.sh db/base-B.mmdb
-sleep 6
-curl -H "X-Test-IP: 8.8.8.8" http://localhost:8080/geoip
-```
+## Why two nginx?
 
-Neste cenário, o módulo **sem** detecção por inode/tamanho nunca recarrega — fica preso na base velha para sempre (e pode retornar vazio, porque o mmap foi reescrito in-place).
+For side-by-side comparison:
 
-### Teste automatizado
+- **Module version A/B:** one with fix X, one without — same database, same request, different behavior.
+- **Before/after:** keep one stable as a reference while the other goes through database swaps.
+- **Reproducibility:** both read the same database via bind mount, so any difference in the response comes from the module, not the data.
 
-```sh
-./test-reload.sh
-```
+## Context
 
-Roda o cenário completo em 5 estágios, mostrando a resposta de cada nginx em cada momento (reset, lookup inicial, troca com mtime preservado, imediato, pós-reload, confirmação) e quantos reloads cada um disparou nos logs.
-
-## Usando bases MMDB reais
-
-As bases em `db/` são de teste (pequenas, com poucos IPs). Para usar bases reais (GeoLite2/GeoIP2 da MaxMind):
-
-1. Coloque o arquivo real em `db/` (ex.: `db/GeoLite2-City.mmdb` — o nome que o `nginx.conf` espera), ou
-2. Edite o caminho no `nginx.conf` (`geoip2 /etc/nginx/geoip/SEU_ARQUIVO.mmdb {`) e monte o volume correspondente.
-
-Para comparar módulos diferentes (ex.: um com fix, outro sem), monte imagens diferentes em cada serviço do `docker-compose.yml` — cada nginx pode apontar para uma imagem distinta enquanto compartilham a mesma base.
-
-## Por que dois nginx?
-
-Para comparação lado a lado:
-
-- **A/B de versões do módulo:** um com o fix X, outro sem — mesma base, mesma requisição, comportamento diferente.
-- **Antes/depois:** deixar um estável como referência enquanto o outro sofre as trocas de base.
-- **Reprodutibilidade:** os dois recebem a mesma base via bind mount, então qualquer diferença na resposta vem do módulo, não do dado.
-
-## Contexto
-
-Este lab nasceu da investigação da issue [leev/ngx_http_geoip2_module#134](https://github.com/leev/ngx_http_geoip2_module/issues/134) e do PR [#138](https://github.com/leev/ngx_http_geoip2_module/pull/138), que tratam de dados stale/corrompidos quando a base é trocada com `auto_reload` ligado.
+This lab grew out of the investigation of issue [leev/ngx_http_geoip2_module#134](https://github.com/leev/ngx_http_geoip2_module/issues/134) and PR [#138](https://github.com/leev/ngx_http_geoip2_module/pull/138), which deal with stale/corrupted data when the database is swapped with `auto_reload` enabled.

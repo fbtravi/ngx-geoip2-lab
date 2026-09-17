@@ -1,6 +1,9 @@
-# bases reais (Grandes / licenciadas) - mantenha so as de teste no repo
+# real (large / licensed) databases - keep only the test fixtures in the repo
 db/GeoIP2-*.mmdb
 db/GeoLite2-Country.mmdb
+
+# locally built binary (platform-specific)
+bin/
 
 # artifacts
 *.log
