@@ -1,0 +1,21 @@
+services:
+  # nginx A - primeira instancia de geoip2 (porta 8080)
+  nginx-a:
+    image: ngx-geoip2-lab:latest
+    build: .
+    container_name: geoip2-lab-a
+    ports:
+      - "8080:8080"
+    volumes:
+      - ./db:/etc/nginx/geoip
+
+  # nginx B - segunda instancia identica (porta 8081)
+  # use para comparar comportamentos (ex.: antes/depois de trocar a base,
+  # ou com uma base diferente montada)
+  nginx-b:
+    image: ngx-geoip2-lab:latest
+    container_name: geoip2-lab-b
+    ports:
+      - "8081:8080"
+    volumes:
+      - ./db:/etc/nginx/geoip
